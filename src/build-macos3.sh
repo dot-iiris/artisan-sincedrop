@@ -61,7 +61,7 @@ version=$(python3 -c "import artisanlib; print(artisanlib.__version__)")
 basename="artisan-mac-$version"
 echo "basename: $basename"
 suffixes=".dmg" # array of suffixes to check
-min_size=150000000
+min_size=${ARTISAN_MIN_DMG_SIZE:-150000000} # since-drop fork: arm64 builds are smaller
 for suffix in $suffixes; do
     filename="$basename$suffix"
     size=$(($(du -k "$filename" | cut -f1) * 1024)) # returns kB so multiply by 1024 (du works on macOS)

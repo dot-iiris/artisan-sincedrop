@@ -1,6 +1,6 @@
 # Builds the since-drop fork for macOS Intel, macOS ARM and Windows.
 # Mirrors the macOS and Windows jobs in .appveyor.yml, on GitHub-hosted runners.
-name: Build since-drop
+name: Build since-drop (all platforms)
 
 on:
   workflow_dispatch:
@@ -26,16 +26,19 @@ jobs:
             runner: macos-15-intel
             arch: x86_64
             min_macos: '13.0'   # same as the official 5.0 Intel build
+            min_dmg: '150000000'
           - name: arm
             runner: macos-15
             arch: arm64
             min_macos: '14.4'   # same as the official 5.0 ARM build
+            min_dmg: '130000000' # native arm64 code is smaller (official arm DMG is ~152 MB)
     runs-on: ${{ matrix.runner }}
     env:
       PYTHON_V: '3.14'
       ARTISAN_OS: macos
       ARTISAN_TARGET_ARCH: ${{ matrix.arch }}
       MACOSX_DEPLOYMENT_TARGET: ${{ matrix.min_macos }}
+      ARTISAN_MIN_DMG_SIZE: ${{ matrix.min_dmg }}
       PYUIC: pyuic6
       PYLUPDATE: ./pylupdate6pro.py
       APPVEYOR: 'True' # build-macos3.sh refuses to run without it
