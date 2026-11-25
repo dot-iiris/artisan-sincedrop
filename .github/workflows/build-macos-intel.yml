@@ -22,7 +22,7 @@ jobs:
     env:
       PYTHON_V: '3.14'
       ARTISAN_OS: macos
-      MACOSX_DEPLOYMENT_TARGET: '14.4'
+      MACOSX_DEPLOYMENT_TARGET: '13.0' # official 5.0 Intel build supports macOS 13 Ventura+
       PYUIC: pyuic6
       PYLUPDATE: ./pylupdate6pro.py
       APPVEYOR: 'True' # build-macos3.sh refuses to run without it
