@@ -1,28 +1,41 @@
-# Builds the Intel (x86_64) macOS DMG of the since-drop fork.
-# Mirrors the macOS job in .appveyor.yml, on a GitHub-hosted Intel runner.
-name: Build macOS Intel (since-drop)
+# Builds the since-drop fork for macOS Intel, macOS ARM and Windows.
+# Mirrors the macOS and Windows jobs in .appveyor.yml, on GitHub-hosted runners.
+name: Build since-drop
 
 on:
   workflow_dispatch:
     inputs:
       release:
-        description: 'Publish the DMG as a GitHub release'
+        description: 'Publish the builds as a GitHub release'
         type: boolean
         default: false
   push:
     branches: [ sincedrop-5.0 ]
-    paths: [ 'src/**', '.github/workflows/build-macos-intel.yml' ]
+    paths: [ 'src/**', '.github/workflows/build-sincedrop.yml' ]
 
 permissions:
   contents: write
 
 jobs:
-  build:
-    runs-on: macos-15-intel
+  macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: intel
+            runner: macos-15-intel
+            arch: x86_64
+            min_macos: '13.0'   # same as the official 5.0 Intel build
+          - name: arm
+            runner: macos-15
+            arch: arm64
+            min_macos: '14.4'   # same as the official 5.0 ARM build
+    runs-on: ${{ matrix.runner }}
     env:
       PYTHON_V: '3.14'
       ARTISAN_OS: macos
-      MACOSX_DEPLOYMENT_TARGET: '13.0' # official 5.0 Intel build supports macOS 13 Ventura+
+      ARTISAN_TARGET_ARCH: ${{ matrix.arch }}
+      MACOSX_DEPLOYMENT_TARGET: ${{ matrix.min_macos }}
       PYUIC: pyuic6
       PYLUPDATE: ./pylupdate6pro.py
       APPVEYOR: 'True' # build-macos3.sh refuses to run without it
@@ -32,18 +45,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.14'
-          architecture: x64
 
       - name: Set paths and revision
         run: |
-          uname -m
+          test "$(uname -m)" = "${{ matrix.arch }}"
           SITE=$(python3 -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')
           echo "PYTHONSITEPKGS=$SITE" >> $GITHUB_ENV
           echo "QT_PATH=$SITE/PyQt6/Qt6" >> $GITHUB_ENV
           REV=$(git rev-parse --verify --short HEAD)
           sed -i '' -e "s/__revision__ = '.*'/__revision__ = '$REV'/" src/artisanlib/__init__.py
           sed -i '' -e "s/__artisan_os__ = '.*'/__artisan_os__ = 'macOS'/" src/artisanlib/__init__.py
-          grep -n "__revision__\|__artisan_os__" src/artisanlib/__init__.py
 
       - name: Install requirements
         run: |
@@ -59,21 +70,84 @@ jobs:
         run: |
           chmod +x *.sh pylupdate6pro.py
           ./build-macos3.sh
-          mv artisan-mac-*.dmg artisan-mac-intel-5.0.0-sincedrop.dmg
+          mv artisan-mac-*.dmg artisan-mac-${{ matrix.name }}-5.0.0-sincedrop.dmg
           ls -la *.dmg
 
       - uses: actions/upload-artifact@v4
         with:
-          name: artisan-mac-intel-5.0.0-sincedrop
-          path: src/artisan-mac-intel-5.0.0-sincedrop.dmg
+          name: artisan-mac-${{ matrix.name }}-5.0.0-sincedrop
+          path: src/artisan-mac-${{ matrix.name }}-5.0.0-sincedrop.dmg
           retention-days: 30
 
-      - name: Publish release
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.release }}
-        env:
-          GH_TOKEN: ${{ github.token }}
+  windows:
+    runs-on: windows-2025
+    env:
+      APPVEYOR: 'True' # the upstream build scripts refuse to run without it
+      PYQT: '6'
+      PYUIC: pyuic6.exe
+      BUILD_PYINSTALLER: 'True' # build the PyInstaller bootloader from source, like upstream (fewer antivirus false positives)
+      VC_REDIST: https://aka.ms/vc14/vc_redist.x64.exe
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        id: py
+        with:
+          python-version: '3.14'
+          architecture: x64
+
+      - name: Set paths and revision
+        shell: pwsh
         run: |
-          gh release create v5.0.0-sincedrop src/artisan-mac-intel-5.0.0-sincedrop.dmg \
-            --target "$GITHUB_SHA" --title "Artisan 5.0.0 since-drop (macOS Intel)" \
-            --notes "Artisan 5.0.0 with the Since DROP LCD (View > Since DROP LCD). Unofficial build, not signed or notarized: right-click the app and choose Open the first time." \
-            || gh release upload v5.0.0-sincedrop src/artisan-mac-intel-5.0.0-sincedrop.dmg --clobber
+          $py = Split-Path '${{ steps.py.outputs.python-path }}'
+          "PYTHON_PATH=$py" >> $env:GITHUB_ENV
+          "QT_TRANSL=$py/Lib/site-packages/PyQt6/Qt6/translations" >> $env:GITHUB_ENV
+          $ver = Select-String -Path ./src/requirements.txt "pyinstaller==([\d\.]*).*platform_system='Windows'" -List | ForEach-Object {$_.Matches.Groups[1].Value}
+          "PYINSTALLER_VER=$ver" >> $env:GITHUB_ENV
+          $rev = git rev-parse --verify --short HEAD
+          (Get-Content src/artisanlib/__init__.py) -replace "__revision__ = '.*'", "__revision__ = '$rev'" -replace "__artisan_os__ = '.*'", "__artisan_os__ = 'Windows'" | Set-Content src/artisanlib/__init__.py -Encoding ascii
+          $year = (Get-Date).year
+          (Get-Content src/version-metadata.yml) -replace 'yyyy', "$year" | Set-Content src/version-metadata.yml -Encoding ascii
+
+      - name: Install NSIS
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}/NSIS/makensis.exe") -and -not (Test-Path "$env:ProgramFiles/NSIS/makensis.exe")) { choco install nsis -y --no-progress }
+
+      - name: Install requirements
+        shell: cmd
+        run: .ci\install-win.bat
+
+      - name: Build
+        shell: cmd
+        working-directory: src
+        run: |
+          call build-win3-pi.bat
+          if errorlevel 1 exit /b 1
+          for %%f in (artisan-win*setup.exe) do move "%%f" artisan-win-x64-5.0.0-sincedrop-setup.exe
+          dir *.exe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: artisan-win-x64-5.0.0-sincedrop
+          path: src/artisan-win-x64-5.0.0-sincedrop-setup.exe
+          retention-days: 30
+
+  release:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.release }}
+    needs: [ macos, windows ]
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish release
+        run: |
+          ls -la dist
+          gh release create v5.0.0-sincedrop dist/* -R "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" --title "Artisan 5.0.0 since-drop" \
+            --notes "Artisan 5.0.0 with the Since DROP LCD (View > Since DROP LCD). Unofficial build, not signed or notarized." \
+            || gh release upload v5.0.0-sincedrop dist/* -R "$GITHUB_REPOSITORY" --clobber
